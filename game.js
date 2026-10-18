@@ -2,7 +2,8 @@ const STORE_KEY = 'paatu-songs-v1';
 const LEGACY_AUDIO_KEY = 'paatu-audio-songs-v2';
 const SEARCH_IMPORT_CLEANUP_KEY = 'paatu-old-search-imports-cleared-v1';
 const YOUTUBE_API_KEY_STORE = 'paatu-youtube-data-api-key-v1';
-const CLIP_STEPS = [0.5, 2, 5, 10, 20, 30];
+const CLIP_STEPS = [0.5, 1, 2, 5];
+const CLIP_POINTS = [100, 80, 60, 40];
 const STARTER = [
   { id: 'malare', title: 'Malare', artist: 'Vijay Yesudas', film: 'Premam', year: 2015, genre: 'Melody', video: '0G2VxhV_gXM', aliases: ['Malare ninne kaanathirunnal'] },
   { id: 'parayuvaan', title: 'Parayuvaan', artist: 'Sid Sriram & Neha S. Nair', film: 'Ishq', year: 2019, genre: 'Melody', video: 'OvNBm3Lpu-Q', aliases: ['Parayuvan'] },
@@ -17,6 +18,10 @@ let songs = loadSongs(), deck = [], activeSong = null, round = 0, score = 0, str
 let player = null, clipTimer = null, toastTimer;
 let youtubeSearchResults = [];
 
+// Cover layer over the YouTube video (hides the picture while the clue plays)
+function coverVideo() { const m = $('videoMask'); if (m) m.hidden = false; }
+function revealVideo() { const m = $('videoMask'); if (m) m.hidden = true; }
+
 function norm(s) {
   return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9\u0D00-\u0D7F]/g, '');
 }
@@ -28,6 +33,12 @@ function youtubeVideoId(value) {
     if (!id) id = url.pathname.match(/\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{11})/)?.[1];
     return /^[A-Za-z0-9_-]{11}$/.test(id || '') ? id : null;
   } catch { return null; }
+}
+function isYouTubeShortUrl(value) {
+  try {
+    const url = new URL(value), host = url.hostname.replace(/^www\./, '').toLowerCase();
+    return ['youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host) && /^\/shorts\//i.test(url.pathname);
+  } catch { return false; }
 }
 function videoFor(song) { return song.video || youtubeVideoId(song.sourceUrl || song.youtubeUrl || ''); }
 function mergeStarterSongs(saved) {
@@ -80,21 +91,41 @@ function nextSong(first = false) {
     activeSong = null; $('roundText').textContent = deck.length ? 'Playlist complete' : 'Ready when you are'; $('clueTime').textContent = 'All done';
     $('playerPlaceholder').classList.remove('hidden');
     $('playerPlaceholder').innerHTML = '<div class="record"></div><b>' + (deck.length ? 'That’s the playlist!' : 'Add your first song') + '</b><p>' + (deck.length ? 'You scored ' + score + ' points.' : 'Add a YouTube song link to your shelf.') + '</p>';
-    $('playBtn').disabled = true; $('replayBtn').disabled = true; $('guessInput').disabled = true; $('submitBtn').disabled = true;
+    $('playBtn').disabled = true; $('replayBtn').disabled = true; $('guessInput').disabled = true; $('submitBtn').disabled = true; updateListenOptions();
     $('skipBtn').style.display = 'none'; $('nextBtn').style.display = 'none'; return;
   }
-  activeSong = deck[round]; clueIndex = initialClueIndex(); locked = false;
+  activeSong = deck[round]; clueIndex = 0; locked = false;
   $('roundText').textContent = 'Round ' + String(round + 1).padStart(2, '0') + ' / ' + String(Math.min(10, deck.length)).padStart(2, '0');
   $('playerShell').classList.remove('has-player'); $('playerPlaceholder').classList.remove('hidden');
   $('playerPlaceholder').innerHTML = '<div class="record"></div><b>Your clue is ready</b><p>Press play to hear a Malayalam song</p>';
-  $('clueTime').textContent = CLIP_STEPS[clueIndex] + ' second clue'; $('guessInput').value = ''; $('guessInput').disabled = false; $('submitBtn').disabled = false;
+  $('clueTime').textContent = clueLabel(clueIndex) + ' clue · ' + CLIP_POINTS[clueIndex] + ' pts available'; $('guessInput').value = ''; $('guessInput').disabled = false; $('submitBtn').disabled = false;
   $('playBtn').disabled = false; $('playBtn').textContent = '▶  Play clue'; $('replayBtn').disabled = true;
   $('feedback').className = 'feedback'; $('feedback').textContent = 'You can replay the clue as often as you need.';
   $('reveal').classList.remove('show'); $('skipBtn').style.display = 'inline-block'; $('nextBtn').style.display = 'none';
-  paintProgress(); suggestions('');
+  paintProgress(); updateListenOptions(); suggestions('');
 }
-function initialClueIndex() { const d = $('difficultySelect').value; return d === 'easy' ? 4 : d === 'hard' ? 0 : 1; }
-function paintProgress() { [...$('progress').children].forEach((el, i) => el.classList.toggle('on', i <= clueIndex)); $('clueTime').textContent = CLIP_STEPS[clueIndex] + ' second clue'; }
+function clueLabel(index) { return CLIP_STEPS[index] + ' sec'; }
+function paintProgress() {
+  [...$('progress').children].forEach((el, i) => el.classList.toggle('on', i <= clueIndex));
+  $('clueTime').textContent = clueLabel(clueIndex) + ' clue · ' + CLIP_POINTS[clueIndex] + ' pts available';
+  updateListenOptions();
+}
+function updateListenOptions() {
+  document.querySelectorAll('.clue-option').forEach(button => {
+    const index = Number(button.dataset.clueIndex), used = clueIndex >= index;
+    button.disabled = !activeSong || locked || used;
+    button.textContent = used ? clueLabel(index) + ' clue used' : 'Play ' + clueLabel(index) + ' · ' + CLIP_POINTS[index] + ' pts';
+  });
+}
+function chooseLongerClue(event) {
+  const button = event.target.closest('.clue-option');
+  if (!button || button.disabled || !activeSong || locked) return;
+  clueIndex = Number(button.dataset.clueIndex);
+  paintProgress();
+  $('feedback').className = 'feedback';
+  $('feedback').textContent = 'Playing the ' + clueLabel(clueIndex) + ' clue. A correct answer is worth up to ' + CLIP_POINTS[clueIndex] + ' points.';
+  playClue();
+}
 function loadYouTubeAPI() {
   if (window.YT?.Player) return Promise.resolve();
   if (window._paatuYTReady) return window._paatuYTReady;
@@ -110,6 +141,7 @@ function clearPlayer() {
   stopPlayer(); if (player?.destroy) try { player.destroy(); } catch {} player = null;
   const mount = document.getElementById('yt-player'); if (mount) mount.remove();
   $('playerShell').classList.remove('has-player'); $('playerPlaceholder').classList.remove('hidden');
+  revealVideo();
 }
 function schedulePause(target) {
   if (clipTimer) clearTimeout(clipTimer);
@@ -119,33 +151,42 @@ async function playClue() {
   if (!activeSong || locked) return;
   const video = videoFor(activeSong); if (!video) { toast('This track has no YouTube link yet.'); return; }
   clearPlayer(); $('playerShell').classList.add('has-player'); $('playerPlaceholder').classList.add('hidden');
+  coverVideo();
   $('replayBtn').disabled = false; $('playBtn').textContent = '♫  Playing clue…';
   try {
     await loadYouTubeAPI();
     const mount = document.createElement('div'); mount.id = 'yt-player'; $('playerShell').insertBefore(mount, $('playerPlaceholder'));
     player = new YT.Player('yt-player', {
       height: '260', width: '100%', videoId: video,
-      playerVars: { autoplay: 1, controls: 1, playsinline: 1, rel: 0, modestbranding: 1, origin: location.origin },
+      playerVars: { autoplay: 1, controls: 0, disablekb: 1, fs: 0, playsinline: 1, rel: 0, modestbranding: 1, origin: location.origin },
       events: {
-        onReady: event => { event.target.seekTo(0, true); event.target.playVideo(); },
+        onReady: event => {
+          event.target.seekTo(0, true); event.target.playVideo();
+          // Mobile autoplay fallback: if playback didn't start, uncover the video so the user can tap play.
+          setTimeout(() => {
+            try { if (player === event.target && event.target.getPlayerState() !== YT.PlayerState.PLAYING) revealVideo(); } catch {}
+          }, 1500);
+        },
         onStateChange: event => {
-          if (event.data === YT.PlayerState.PLAYING) { $('playBtn').textContent = '♫  Playing clue…'; schedulePause(event.target); }
+          if (event.data === YT.PlayerState.PLAYING) { coverVideo(); $('playBtn').textContent = '♫  Playing clue…'; schedulePause(event.target); }
           if (event.data === YT.PlayerState.PAUSED) { if (clipTimer) clearTimeout(clipTimer); clipTimer = null; $('playBtn').textContent = '▶  Play ' + CLIP_STEPS[clueIndex] + ' sec clue'; }
           if (event.data === YT.PlayerState.ENDED) { if (clipTimer) clearTimeout(clipTimer); clipTimer = null; $('playBtn').textContent = '▶  Replay clue'; }
         },
-        onError: () => { $('feedback').className = 'feedback bad'; $('feedback').textContent = 'This video can’t be played here. Try another link from the song shelf.'; $('playBtn').textContent = '▶  Try again'; }
+        onError: () => { revealVideo(); $('feedback').className = 'feedback bad'; $('feedback').textContent = 'This video can’t be played here. Try another link from the song shelf.'; $('playBtn').textContent = '▶  Try again'; }
       }
     });
   } catch {
+    revealVideo();
     $('feedback').className = 'feedback bad'; $('feedback').textContent = 'Could not load the YouTube player. Check your connection and try again.'; $('playBtn').textContent = '▶  Play clue';
   }
 }
 function replay() {
   if (!player) { playClue(); return; }
-  try { if (clipTimer) clearTimeout(clipTimer); clipTimer = null; player.seekTo(0, true); player.playVideo(); } catch { playClue(); }
+  try { if (clipTimer) clearTimeout(clipTimer); clipTimer = null; coverVideo(); player.seekTo(0, true); player.playVideo(); } catch { playClue(); }
 }
 function revealSong() {
   if (!activeSong) return;
+  revealVideo();
   $('revealTitle').textContent = activeSong.title;
   $('revealMeta').textContent = [activeSong.artist, activeSong.film, activeSong.year, activeSong.genre].filter(Boolean).join(' · ');
   $('reveal').classList.add('show');
@@ -156,17 +197,17 @@ function submitGuess() {
   if (!raw) { $('feedback').className = 'feedback bad'; $('feedback').textContent = 'Type a title first — trust your ears.'; $('guessInput').focus(); return; }
   const accepted = [activeSong.title, ...(activeSong.aliases || [])].map(norm);
   if (accepted.includes(norm(raw))) {
-    locked = true; stopPlayer(); const points = [100, 80, 60, 40, 20][clueIndex] || 20; score += points; streak++;
+    locked = true; stopPlayer(); const points = CLIP_POINTS[clueIndex] || CLIP_POINTS[CLIP_POINTS.length - 1]; score += points; streak++;
     $('scoreValue').textContent = String(score).padStart(3, '0'); $('feedback').className = 'feedback good'; $('feedback').textContent = 'That’s it! +' + points + ' points';
     revealSong(); finishRound();
   } else {
     streak = 0; updateStreak();
     if (clueIndex < CLIP_STEPS.length - 1) { clueIndex++; paintProgress(); $('feedback').className = 'feedback bad'; $('feedback').textContent = 'Not quite. A longer clue is unlocked — listen again.'; replay(); }
-    else { $('feedback').className = 'feedback bad'; $('feedback').textContent = 'One more? That was the last clue. Skip to reveal the answer.'; }
+    else { $('feedback').className = 'feedback bad'; $('feedback').textContent = 'That was the last clue. Skip to reveal the answer.'; }
   }
 }
 function finishRound() {
-  $('guessInput').disabled = true; $('submitBtn').disabled = true; $('skipBtn').style.display = 'none'; $('nextBtn').style.display = 'inline-block';
+  $('guessInput').disabled = true; $('submitBtn').disabled = true; updateListenOptions(); $('skipBtn').style.display = 'none'; $('nextBtn').style.display = 'inline-block';
   $('nextBtn').textContent = round + 1 >= Math.min(10, deck.length) ? 'Finish playlist →' : 'Next song →'; updateStreak();
 }
 function skip() { if (!activeSong) return; stopPlayer(); locked = true; streak = 0; updateStreak(); $('feedback').className = 'feedback'; $('feedback').textContent = 'Skipped — here’s the answer.'; revealSong(); finishRound(); }
@@ -192,7 +233,8 @@ function suggestions(q) {
 function toast(message) { const el = $('toast'); el.textContent = message; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2400); }
 async function importYoutubeDetails() {
   const form = $('addSongForm'), url = String(new FormData(form).get('youtubeUrl') || '').trim(), id = youtubeVideoId(url), status = $('youtubeImportStatus'), button = $('importYoutubeBtn');
-  if (!id) { status.textContent = 'Paste a valid YouTube video, Shorts, or Music link.'; return; }
+  if (isYouTubeShortUrl(url)) { status.textContent = 'YouTube Shorts are not accepted. Use a full movie song video instead.'; return; }
+  if (!id) { status.textContent = 'Paste a valid full YouTube video or Music link.'; return; }
   button.disabled = true; button.textContent = 'Fetching details…'; status.textContent = 'Looking up the video title and channel…';
   try {
     const endpoint = 'https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + id);
@@ -206,6 +248,7 @@ async function importYoutubeDetails() {
 function addSong(event) {
   event.preventDefault(); const form = event.currentTarget, data = new FormData(form), url = String(data.get('youtubeUrl') || '').trim();
   const video = youtubeVideoId(url), title = String(data.get('title') || '').trim(), year = Number(data.get('year'));
+  if (isYouTubeShortUrl(url)) { toast('YouTube Shorts are not accepted. Add a full movie song video.'); return; }
   if (!video) { toast('Add a valid YouTube video link.'); return; }
   if (year < 1950 || year > 2029) { toast('Choose a release year between 1950 and 2029.'); return; }
   if (songs.some(s => norm(s.title) === norm(title))) { toast('That title is already on your shelf.'); return; }
@@ -226,14 +269,28 @@ function saveYouTubeApiKey() {
 function isMalayalamMovieSongResult(item) {
   const snippet = item?.snippet || {}, title = String(snippet.title || ''), description = String(snippet.description || ''), channel = String(snippet.channelTitle || '');
   const searchable = `${title} ${description}`;
-  if (/\b(trailer|teaser|review|interview|making|behind the scenes|full movie|full film|jukebox|reaction|explained|movie scene|comedy scene|status video)\b/i.test(searchable)) return false;
+  if (/\b(trailer|teaser|review|interview|making|behind the scenes|full movie|full film|jukebox|reaction|explained|movie scene|comedy scene|status video|shorts)\b|#shorts?\b/i.test(searchable)) return false;
   const songCue = /\b(song|songs|audio|lyric(?:al)?|music video|soundtrack|ost)\b|പാട്ട്|ഗാനം|ഗാനങ്ങൾ|സോങ്/i.test(searchable);
   const movieCue = /\b(movie|film|cinema|soundtrack|ost)\b|\b(?:movie|film)\s*:/i.test(searchable) || /സിനിമ|ചിത്രം|മൂവി/i.test(searchable);
   const malayalamCue = /\b(malayalam|mollywood)\b|മലയാള/i.test(`${searchable} ${channel}`) || /manorama music|muzik247|satyam audios|millennium audios|east coast audio|t-series malayalam|sony music malayalam|think music malayalam|goodwill entertainments/i.test(channel);
   return songCue && movieCue && malayalamCue;
 }
 function searchQueryForYear(year) {
-  return `Malayalam movie songs ${year} official -trailer -teaser -review -interview -jukebox -fullmovie -reaction`;
+  return `Malayalam movie songs ${year} official -trailer -teaser -review -interview -jukebox -fullmovie -reaction -shorts -#shorts`;
+}
+function durationSeconds(value) {
+  const match = String(value || '').match(/^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);
+  if (!match) return 0;
+  return Number(match[1] || 0) * 86400 + Number(match[2] || 0) * 3600 + Number(match[3] || 0) * 60 + Number(match[4] || 0);
+}
+async function longFormVideoIds(items, key) {
+  const ids = [...new Set(items.map(item => item.id?.videoId).filter(id => /^[A-Za-z0-9_-]{11}$/.test(id || '')))];
+  if (!ids.length) return new Set();
+  const params = new URLSearchParams({ part: 'contentDetails', id: ids.join(','), key });
+  const response = await fetch('https://www.googleapis.com/youtube/v3/videos?' + params.toString());
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || 'Could not verify video lengths to filter Shorts.');
+  return new Set((data.items || []).filter(video => durationSeconds(video.contentDetails?.duration) > 180).map(video => video.id));
 }
 function resultFilm(snippet) {
   return String(snippet?.description || '').match(/(?:movie|film)\s*:\s*([^\n|]+)/i)?.[1]?.trim().slice(0, 80) || '';
@@ -262,7 +319,8 @@ async function searchYouTubeByYear() {
     const response = await fetch('https://www.googleapis.com/youtube/v3/search?' + params.toString());
     const data = await response.json();
     if (!response.ok) throw new Error(data.error?.message || 'YouTube search failed. Check the API key and quota.');
-    youtubeSearchResults = (data.items || []).filter(item => /^[A-Za-z0-9_-]{11}$/.test(item.id?.videoId || '') && isMalayalamMovieSongResult(item));
+    const results = data.items || [], longFormIds = await longFormVideoIds(results, key);
+    youtubeSearchResults = results.filter(item => longFormIds.has(item.id?.videoId) && isMalayalamMovieSongResult(item));
     renderYouTubeSearchResults(year);
     $('apiKeyStatus').textContent = 'Found ' + youtubeSearchResults.length + ' likely Malayalam movie songs for ' + year + '. Results are filtered by song, film, and Malayalam clues; confirm the release year before adding.';
   } catch (error) {
@@ -295,7 +353,8 @@ async function loadSongsForYear() {
       if (!response.ok) throw new Error(data.error?.message || `YouTube search failed for ${year}.`);
       const results = (data.items || []).filter(item => /^[A-Za-z0-9_-]{11}$/.test(item.id?.videoId || ''));
       fetched += results.length; page++;
-      const songResults = results.filter(isMalayalamMovieSongResult);
+      const longFormIds = await longFormVideoIds(results, key);
+      const songResults = results.filter(item => longFormIds.has(item.id.videoId) && isMalayalamMovieSongResult(item));
       qualified += songResults.length;
       for (const item of songResults) {
         const video = item.id.videoId;
@@ -336,9 +395,9 @@ $('guessInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.pr
 document.addEventListener('click', e => { if (!e.target.closest('.guess-wrap')) $('suggestions').classList.remove('show'); });
 $('skipBtn').addEventListener('click', skip); $('nextBtn').addEventListener('click', () => nextSong());
 $('eraSelect').addEventListener('change', () => { resetGame(); populateYears(); }); $('yearSelect').addEventListener('change', resetGame);
-$('difficultySelect').addEventListener('change', () => { if (activeSong && !locked) { clueIndex = initialClueIndex(); paintProgress(); } });
+$('clueOptions').addEventListener('click', chooseLongerClue);
 $('genreList').addEventListener('click', e => { const chip = e.target.closest('.genre-chip'); if (!chip) return; document.querySelectorAll('.genre-chip').forEach(b => b.classList.toggle('selected', b === chip)); resetGame(); });
-$('resetFilters').addEventListener('click', () => { $('eraSelect').value = 'all'; $('yearSelect').value = 'all'; $('difficultySelect').value = 'hard'; document.querySelectorAll('.genre-chip').forEach(b => b.classList.toggle('selected', b.dataset.genre === 'all')); resetGame(); });
+$('resetFilters').addEventListener('click', () => { $('eraSelect').value = 'all'; $('yearSelect').value = 'all'; document.querySelectorAll('.genre-chip').forEach(b => b.classList.toggle('selected', b.dataset.genre === 'all')); resetGame(); });
 $('openAddBtn').addEventListener('click', () => { $('shelf').classList.add('show'); $('addDetails').open = true; $('song-shelf').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
 $('showSongsBtn').addEventListener('click', () => { $('shelf').classList.toggle('show'); if ($('shelf').classList.contains('show')) $('song-shelf').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
 $('importYoutubeBtn').addEventListener('click', importYoutubeDetails); $('addSongForm').addEventListener('submit', addSong);
