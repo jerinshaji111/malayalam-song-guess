@@ -15,7 +15,7 @@ const STARTER = [
 ];
 const $ = id => document.getElementById(id);
 let songs = loadSongs(), deck = [], activeSong = null, round = 0, score = 0, streak = 0, clueIndex = 0, locked = false;
-let player = null, clipTimer = null, toastTimer;
+let player = null, clipTimer = null, toastTimer, playbackStarted = false;
 let youtubeSearchResults = [];
 
 // Cover layer over the YouTube video (hides the picture while the clue plays)
@@ -151,7 +151,7 @@ async function playClue() {
   if (!activeSong || locked) return;
   const video = videoFor(activeSong); if (!video) { toast('This track has no YouTube link yet.'); return; }
   clearPlayer(); $('playerShell').classList.add('has-player'); $('playerPlaceholder').classList.add('hidden');
-  coverVideo();
+  coverVideo(); playbackStarted = false;
   $('replayBtn').disabled = false; $('playBtn').textContent = '♫  Playing clue…';
   try {
     await loadYouTubeAPI();
@@ -164,11 +164,11 @@ async function playClue() {
           event.target.seekTo(0, true); event.target.playVideo();
           // Mobile autoplay fallback: if playback didn't start, uncover the video so the user can tap play.
           setTimeout(() => {
-            try { if (player === event.target && event.target.getPlayerState() !== YT.PlayerState.PLAYING) revealVideo(); } catch {}
+            if (player === event.target && !playbackStarted) revealVideo();
           }, 1500);
         },
         onStateChange: event => {
-          if (event.data === YT.PlayerState.PLAYING) { coverVideo(); $('playBtn').textContent = '♫  Playing clue…'; schedulePause(event.target); }
+          if (event.data === YT.PlayerState.PLAYING) { playbackStarted = true; coverVideo(); $('playBtn').textContent = '♫  Playing clue…'; schedulePause(event.target); }
           if (event.data === YT.PlayerState.PAUSED) { if (clipTimer) clearTimeout(clipTimer); clipTimer = null; $('playBtn').textContent = '▶  Play ' + CLIP_STEPS[clueIndex] + ' sec clue'; }
           if (event.data === YT.PlayerState.ENDED) { if (clipTimer) clearTimeout(clipTimer); clipTimer = null; $('playBtn').textContent = '▶  Replay clue'; }
         },
